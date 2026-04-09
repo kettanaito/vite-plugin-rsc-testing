@@ -1,0 +1,29 @@
+{
+  "type": "module",
+  "name": "vite-rsc-testing-plugin",
+  "version": "0.0.0",
+  "description": "Vite plugin for testing React Server Components.",
+  "exports": {
+    ".": "./build/index.mts"
+  },
+  "scripts": {
+    "test": "vitest"
+  },
+  "keywords": [],
+  "author": "Artem Zakharchenko <kettanaito@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-rsc": "^0.5.23",
+    "@vitest/browser-playwright": "^4.1.4",
+    "playwright": "^1.59.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.8",
+    "vitest": "^4.1.4",
+    "vitest-browser-react": "^2.2.0"
+  }
+}
