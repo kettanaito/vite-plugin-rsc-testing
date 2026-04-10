@@ -1,7 +1,7 @@
 import { Suspense } from 'react'
 import { randomUUID } from 'node:crypto'
 
-export default async function Homepage() {
+export default async function AsyncComponent() {
   return (
     <Suspense fallback={<p>Fetching...</p>}>
       <h1>Pokemons {randomUUID()}</h1>
