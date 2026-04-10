@@ -13,7 +13,7 @@ Vite plugin for testing React Server Components in Vitest Browser Mode.
 ### Install
 
 ```ts
-npm i vite-plugin-rsc-testing @vitejs/plugin-rsc vitest-browser-react
+npm i vite-plugin-rsc-testing vitest-browser-react
 ```
 
 ### Configure
