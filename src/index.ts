@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
-import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import { Readable } from 'node:stream'
+import { text } from 'node:stream/consumers'
 import { isRunnableDevEnvironment, type PluginOption } from 'vite'
 import rsc from '@vitejs/plugin-rsc'
 import type { VitestPluginContext } from 'vitest/node'
@@ -107,20 +108,15 @@ export function rscTestingPlugin(): PluginOption {
 
             // Server actions.
             if (req.method === 'POST') {
-              const request = new Request(url, {
-                method: req.method,
-                headers: req.headers,
-                duplex: 'half',
-                body: Readable.toWeb(req),
-              })
-
-              const actionId = request.headers.get('x-rsc-action')
+              const actionId = req.headers['x-rsc-action']
 
               if (typeof actionId === 'string') {
-                const contentType = request.headers.get('content-type')
+                const contentType = req.headers['content-type']
                 const body = contentType?.startsWith('multipart/form-data')
-                  ? await request.formData()
-                  : await request.text()
+                  ? await new Response(Readable.toWeb(req), {
+                      headers: { 'content-type': contentType },
+                    }).formData()
+                  : await text(req)
 
                 temporaryReferences = createTemporaryReferenceSet()
                 const args = await decodeReply(body, { temporaryReferences })
