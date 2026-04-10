@@ -1,13 +1,16 @@
+/// <reference types="vitest/config" />
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import type { PluginOption } from 'vite'
-import { isRunnableDevEnvironment } from 'vite'
+import { isRunnableDevEnvironment, type PluginOption } from 'vite'
 import rsc from '@vitejs/plugin-rsc'
-
-const RSC_SETUP_PATH = fileURLToPath(new URL('./rsc-setup.ts', import.meta.url))
-
+import type { VitestPluginContext } from 'vitest/node'
 import type React from 'react'
 import type { ReactFormState } from 'react-dom/client'
+
+const RSC_SETUP_PATH = fileURLToPath(new URL('./rsc-setup.ts', import.meta.url))
+const TEST_SETUP_PATH = fileURLToPath(
+  new URL('./test-setup.ts', import.meta.url),
+)
 
 export type RscPayload = {
   root: React.ReactNode
@@ -21,13 +24,26 @@ export type RscPayload = {
 export function rscTestingPlugin(): PluginOption {
   return [
     rsc({
-      // serverHandler: false,
       entries: {
         rsc: 'noop.js',
         ssr: 'noop.js',
         client: 'noop.js',
       },
     }),
+    {
+      name: 'rsc-testing-plugin:vitest-hooks',
+      configureVitest(context: VitestPluginContext) {
+        const setupFiles = Array.prototype.concat(
+          [],
+          context.project.config.setupFiles || [],
+        )
+
+        if (!setupFiles.includes(TEST_SETUP_PATH)) {
+          setupFiles.push(TEST_SETUP_PATH)
+          context.project.config.setupFiles = setupFiles
+        }
+      },
+    },
     {
       name: 'rsc-testing-plugin:rsc-middleware',
       async configureServer(server) {
@@ -46,6 +62,22 @@ export function rscTestingPlugin(): PluginOption {
             return
           }
 
+          /**
+           * @note Invalidate the component module imports.
+           * This request is fired in the "beforeEach" hook inserted by this plugin.
+           * This makes sure that the imported modules' state is preserved within the test case
+           * but reset before the new run.
+           */
+          const clearCacheFlag = url.searchParams.get('clearCache')
+          if (clearCacheFlag === '1') {
+            rscEnvironment.moduleGraph.invalidateAll()
+            rscEnvironment.runner.evaluatedModules.clear()
+
+            res.statusCode = 200
+            res.end()
+            return
+          }
+
           const componentPath = url.searchParams.get('component')
           if (!componentPath) {
             res.statusCode = 400
@@ -54,17 +86,6 @@ export function rscTestingPlugin(): PluginOption {
           }
 
           try {
-            /**
-             * @note Invalidate the component module import on each request.
-             * This prevents root-level values from persisting across test runs
-             * and provides a deterministic initial state for each test case.
-             */
-            const moduleNode =
-              await rscEnvironment.moduleGraph.getModuleByUrl(componentPath)
-            if (moduleNode != null) {
-              rscEnvironment.moduleGraph.invalidateModule(moduleNode)
-            }
-
             const componentModule =
               await rscEnvironment.runner.import(componentPath)
             const { default: Component } = componentModule

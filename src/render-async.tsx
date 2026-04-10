@@ -50,36 +50,24 @@ function RscRoot({
   componentUrl: string
   payloadStream: PromiseLike<RscPayload>
 }) {
-  let setPayload: (value: RscPayload) => void
-
   const initialPayload = use(payloadStream)
-  const [payload, _setPayload] = useState<RscPayload>(initialPayload)
+  const [payload, setPayload] = useState<RscPayload>(initialPayload)
 
   useEffect(() => {
-    setPayload = (value) => startTransition(() => _setPayload(value))
-  }, [_setPayload])
-
-  setServerCallback(async (id, args) => {
-    const temporaryReferences = createTemporaryReferenceSet()
-    const payload = await createFromFetch<RscPayload>(
-      fetch(componentUrl, {
-        method: 'POST',
-        headers: {
-          'x-rsc-action': id,
-        },
-        body: await encodeReply(args, { temporaryReferences }),
-      }),
-    )
-
-    setPayload(payload)
-    const { ok, data } = payload.returnValue || {}
-
-    if (!ok) {
-      throw data
-    }
-
-    return data
-  })
+    setServerCallback(async (id, args) => {
+      const temporaryReferences = createTemporaryReferenceSet()
+      const next = await createFromFetch<RscPayload>(
+        fetch(componentUrl, {
+          method: 'POST',
+          headers: { 'x-rsc-action': id },
+          body: await encodeReply(args, { temporaryReferences }),
+        }),
+      )
+      startTransition(() => setPayload(next))
+      if (next.returnValue && !next.returnValue.ok) throw next.returnValue.data
+      return next.returnValue?.data
+    })
+  }, [componentUrl])
 
   return payload.root
 }
