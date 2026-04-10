@@ -2,3 +2,5 @@
 /build
 *.log
 .DS_Store
+.vitest-attachments
+__screenshots__

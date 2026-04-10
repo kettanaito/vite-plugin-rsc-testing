@@ -5,8 +5,8 @@ Vite plugin for testing React Server Components in Vitest Browser Mode.
 ## Features
 
 - [x] Async server components (`Suspense`);
-- [ ] Interactive server components;
-- [ ] Server actions;
+- [x] Client-side hydration;
+- [x] Server actions;
 
 ## Getting started
 
