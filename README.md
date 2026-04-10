@@ -1,6 +1,6 @@
 # `vite-plugin-rsc-testing`
 
-Vite plugin for testing React Server Components in Vitest Browser Mode.
+Vite plugin for testing [React Server Components](https://react.dev/reference/rsc/server-components) in [Vitest Browser Mode](https://vitest.dev/guide/browser/).
 
 ## Features
 
