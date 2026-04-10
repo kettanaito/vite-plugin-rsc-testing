@@ -54,6 +54,17 @@ export function rscTestingPlugin(): PluginOption {
           }
 
           try {
+            /**
+             * @note Invalidate the component module import on each request.
+             * This prevents root-level values from persisting across test runs
+             * and provides a deterministic initial state for each test case.
+             */
+            const moduleNode =
+              await rscEnvironment.moduleGraph.getModuleByUrl(componentPath)
+            if (moduleNode != null) {
+              rscEnvironment.moduleGraph.invalidateModule(moduleNode)
+            }
+
             const componentModule =
               await rscEnvironment.runner.import(componentPath)
             const { default: Component } = componentModule
