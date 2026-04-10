@@ -1,7 +1,7 @@
 import { it, expect } from 'vitest'
 import { page } from 'vitest/browser'
 import { renderAsync } from '../../src/render-async'
-import AsyncComponent from './async-components'
+import AsyncComponent from './server'
 
 it('renders an async react server component', async () => {
   await renderAsync(<AsyncComponent />)
