@@ -1,8 +1,12 @@
-import type { Plugin } from 'vite'
+import type { PluginOption } from 'vite'
 import { isRunnableDevEnvironment } from 'vite'
+import rsc from '@vitejs/plugin-rsc'
 
-export function rscTestingPlugin(): Array<Plugin> {
+export function rscTestingPlugin(): PluginOption {
   return [
+    rsc({
+      serverHandler: false,
+    }),
     {
       name: 'rsc-testing-plugin:rsc-middleware',
       configureServer(server) {
