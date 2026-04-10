@@ -1,20 +1,49 @@
+import { Readable } from 'node:stream'
+import { fileURLToPath } from 'node:url'
 import type { PluginOption } from 'vite'
 import { isRunnableDevEnvironment } from 'vite'
 import rsc from '@vitejs/plugin-rsc'
 
+const RSC_SETUP_PATH = fileURLToPath(new URL('./rsc-setup.ts', import.meta.url))
+
+import type React from 'react'
+import type { ReactFormState } from 'react-dom/client'
+
+export type RscPayload = {
+  root: React.ReactNode
+  returnValue?: {
+    ok: boolean
+    data: unknown
+  }
+  formState?: ReactFormState
+}
+
 export function rscTestingPlugin(): PluginOption {
   return [
     rsc({
-      serverHandler: false,
+      // serverHandler: false,
+      entries: {
+        rsc: 'noop.js',
+        ssr: 'noop.js',
+        client: 'noop.js',
+      },
     }),
     {
       name: 'rsc-testing-plugin:rsc-middleware',
-      configureServer(server) {
+      async configureServer(server) {
+        const rscEnvironment = server.environments['rsc']
+
         server.middlewares.use(async (req, res, next) => {
           const url = new URL(req.url ?? '/', 'http://localhost')
 
           if (url.pathname !== '/__rsc') {
             return next()
+          }
+
+          if (!rscEnvironment || !isRunnableDevEnvironment(rscEnvironment)) {
+            res.statusCode = 500
+            res.end('RSC environment not available')
+            return
           }
 
           const componentPath = url.searchParams.get('component')
@@ -24,43 +53,74 @@ export function rscTestingPlugin(): PluginOption {
             return
           }
 
-          const rscEnvironment = server.environments['rsc']
-          if (!rscEnvironment || !isRunnableDevEnvironment(rscEnvironment)) {
-            res.statusCode = 500
-            res.end('RSC environment not available')
-            return
-          }
-
           try {
-            const { renderToReadableStream } =
-              (await rscEnvironment.runner.import(
-                '@vitejs/plugin-rsc/rsc',
-              )) as {
-                renderToReadableStream: (
-                  element: unknown,
-                ) => ReadableStream<Uint8Array>
-              }
+            const componentModule =
+              await rscEnvironment.runner.import(componentPath)
+            const { default: Component } = componentModule
 
-            const mod = await rscEnvironment.runner.import(componentPath)
-            const Component = mod.default
+            const {
+              createTemporaryReferenceSet,
+              decodeReply,
+              decodeAction,
+              decodeFormState,
+              loadServerAction,
+              renderToReadableStream,
+            } = (await rscEnvironment.runner.import(
+              RSC_SETUP_PATH,
+            )) as typeof import('./rsc-setup')
 
-            const stream = renderToReadableStream(Component())
+            let returnValue: RscPayload['returnValue']
+            let formState: ReactFormState | undefined
+            let temporaryReferences: unknown | undefined
 
-            res.setHeader('Content-Type', 'text/x-component;charset=utf-8')
-            res.setHeader('Transfer-Encoding', 'chunked')
+            // Server actions.
+            if (req.method === 'POST') {
+              const request = new Request(url, {
+                method: req.method,
+                headers: req.headers,
+                duplex: 'half',
+                body: Readable.toWeb(req),
+              })
 
-            const reader = stream.getReader()
-            const push = async () => {
-              while (true) {
-                const { done, value } = await reader.read()
-                if (done) {
-                  res.end()
-                  return
+              const actionId = request.headers.get('x-rsc-action')
+
+              if (typeof actionId === 'string') {
+                const contentType = request.headers.get('content-type')
+                const body = contentType?.startsWith('multipart/form-data')
+                  ? await request.formData()
+                  : await request.text()
+
+                temporaryReferences = createTemporaryReferenceSet()
+                const args = await decodeReply(body, { temporaryReferences })
+                const action = await loadServerAction(actionId)
+
+                try {
+                  const data = await action.apply(null, args)
+                  returnValue = { ok: true, data }
+                } catch (error) {
+                  returnValue = { ok: false, data: error }
                 }
-                res.write(value)
+              } else {
+                const formData = await request.formData()
+                const decodedAction = await decodeAction(formData)
+                const result = await decodedAction()
+                formState = await decodeFormState(result, formData)
               }
             }
-            await push()
+
+            res.statusCode = returnValue?.ok === false ? 500 : 200
+            res.setHeader('Content-Type', 'text/x-component;charset=utf-8')
+            res.setHeader('Content-Encoding', 'chunked')
+
+            const rscPayload: RscPayload = {
+              root: Component(),
+              formState,
+              returnValue,
+            }
+            const stream = renderToReadableStream(rscPayload, {
+              temporaryReferences,
+            })
+            Readable.fromWeb(stream).pipe(res)
           } catch (error) {
             console.error('Error during RSC rendering:', error)
 

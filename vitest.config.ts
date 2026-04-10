@@ -11,6 +11,7 @@ export default defineConfig({
       instances: [{ browser: 'chromium' }],
       headless: true,
     },
+    testTimeout: 5000,
   },
   plugins: [rscTestingPlugin()],
 })
