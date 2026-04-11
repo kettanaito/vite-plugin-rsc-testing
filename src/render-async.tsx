@@ -1,7 +1,7 @@
 import {
+  type ReactElement,
   use,
   Suspense,
-  type ReactElement,
   useState,
   useEffect,
   startTransition,
@@ -22,18 +22,32 @@ setRequireModule({
   },
 })
 
-export async function renderAsync(
-  element: ReactElement,
-): Promise<RenderResult> {
-  const componentPath = (element.type as { __rscPath?: string }).__rscPath
+type ReactServerElement = ReactElement & {
+  type: {
+    __componentPath?: string
+  }
+}
 
-  if (!componentPath) {
+export async function renderAsync(
+  element: ReactServerElement,
+): Promise<RenderResult> {
+  const componentPath = element.type.__componentPath
+
+  if (typeof componentPath !== 'string') {
     throw new Error(
-      'Component does not have an __rscPath. Is the rscTransformPlugin active?',
+      `Failed to render a server component: expected a component path but got "${componentPath}"`,
     )
   }
 
-  const componentUrl = `/__rsc?component=${encodeURIComponent(componentPath)}`
+  const searchParams = new URLSearchParams({
+    c: componentPath,
+  })
+
+  if (element.props != null) {
+    searchParams.set('p', JSON.stringify(element.props))
+  }
+
+  const componentUrl = `/__rsc?${searchParams.toString()}`
   const payloadStream = createFromFetch<RscPayload>(fetch(componentUrl))
 
   return render(

@@ -1,4 +1,5 @@
 /// <reference types="vitest/config" />
+import { type IncomingMessage } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
 import { text } from 'node:stream/consumers'
@@ -20,6 +21,12 @@ export type RscPayload = {
     data: unknown
   }
   formState?: ReactFormState
+}
+
+function formData(message: IncomingMessage): Promise<FormData> {
+  return new Response(Readable.toWeb(message), {
+    headers: { 'content-type': message.headers['content-type'] },
+  }).formData()
 }
 
 export function rscTestingPlugin(): PluginOption {
@@ -79,7 +86,7 @@ export function rscTestingPlugin(): PluginOption {
             return
           }
 
-          const componentPath = url.searchParams.get('component')
+          const componentPath = url.searchParams.get('c')
           if (!componentPath) {
             res.statusCode = 400
             res.end('Missing "component" search parameter')
@@ -113,9 +120,7 @@ export function rscTestingPlugin(): PluginOption {
               if (typeof actionId === 'string') {
                 const contentType = req.headers['content-type']
                 const body = contentType?.startsWith('multipart/form-data')
-                  ? await new Response(Readable.toWeb(req), {
-                      headers: { 'content-type': contentType },
-                    }).formData()
+                  ? await formData(req)
                   : await text(req)
 
                 temporaryReferences = createTemporaryReferenceSet()
@@ -129,10 +134,10 @@ export function rscTestingPlugin(): PluginOption {
                   returnValue = { ok: false, data: error }
                 }
               } else {
-                const formData = await request.formData()
-                const decodedAction = await decodeAction(formData)
+                const body = await formData(req)
+                const decodedAction = await decodeAction(body)
                 const result = await decodedAction()
-                formState = await decodeFormState(result, formData)
+                formState = await decodeFormState(result, body)
               }
             }
 
@@ -140,8 +145,9 @@ export function rscTestingPlugin(): PluginOption {
             res.setHeader('Content-Type', 'text/x-component;charset=utf-8')
             res.setHeader('Content-Encoding', 'chunked')
 
+            const componentProps = JSON.parse(url.searchParams.get('p') || '{}')
             const rscPayload: RscPayload = {
-              root: Component(),
+              root: Component(componentProps),
               formState,
               returnValue,
             }
@@ -192,7 +198,7 @@ export function rscTestingPlugin(): PluginOption {
         return {
           code: `
 const stub = () => null;
-stub.__rscPath = ${JSON.stringify(id)};
+stub.__componentPath = ${JSON.stringify(id)};
 export default stub;
 `,
           map: null,
