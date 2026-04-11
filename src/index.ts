@@ -25,41 +25,130 @@ export type RscPayload = {
   formState?: ReactFormState
 }
 
-function renderImport(
-  specifiers: t.ImportDeclaration['specifiers'],
-  source: string,
-): string {
-  const defaultSpec = specifiers.find(
-    (s): s is t.ImportDefaultSpecifier => s.type === 'ImportDefaultSpecifier',
-  )
-  const namespaceSpec = specifiers.find(
-    (s): s is t.ImportNamespaceSpecifier =>
-      s.type === 'ImportNamespaceSpecifier',
-  )
-  const namedSpecs = specifiers.filter(
-    (s): s is t.ImportSpecifier => s.type === 'ImportSpecifier',
-  )
+type ExportClassification =
+  | { kind: 'component' }
+  | { kind: 'literal'; valueStart: number; valueEnd: number }
+  | { kind: 'unknown' }
 
-  const parts: string[] = []
-  if (defaultSpec) parts.push(defaultSpec.local.name)
-  if (namespaceSpec) parts.push(`* as ${namespaceSpec.local.name}`)
-  if (namedSpecs.length > 0) {
-    parts.push(
-      `{ ${namedSpecs
-        .map((s) => {
-          const imported =
-            s.imported.type === 'Identifier'
-              ? s.imported.name
-              : s.imported.value
-          return imported === s.local.name
-            ? s.local.name
-            : `${imported} as ${s.local.name}`
-        })
-        .join(', ')} }`,
+function isLiteralInit(node: t.Node | null | undefined): boolean {
+  if (!node) return false
+  switch (node.type) {
+    case 'StringLiteral':
+    case 'NumericLiteral':
+    case 'BooleanLiteral':
+    case 'NullLiteral':
+    case 'BigIntLiteral':
+      return true
+    case 'TemplateLiteral':
+      return node.expressions.length === 0
+    case 'UnaryExpression':
+      return (
+        (node.operator === '-' ||
+          node.operator === '+' ||
+          node.operator === '!') &&
+        isLiteralInit(node.argument)
+      )
+    case 'ArrayExpression':
+      return node.elements.every(
+        (el) => el !== null && el.type !== 'SpreadElement' && isLiteralInit(el),
+      )
+    case 'ObjectExpression':
+      return node.properties.every((p) => {
+        if (p.type !== 'ObjectProperty') return false
+        if (p.computed) return false
+        if (
+          p.key.type !== 'Identifier' &&
+          p.key.type !== 'StringLiteral' &&
+          p.key.type !== 'NumericLiteral'
+        )
+          return false
+        return isLiteralInit(p.value as t.Node)
+      })
+  }
+  return false
+}
+
+function isComponentCallExpression(node: t.CallExpression): boolean {
+  const callee = node.callee
+  if (callee.type === 'Identifier') {
+    return callee.name === 'memo' || callee.name === 'forwardRef'
+  }
+  if (
+    callee.type === 'MemberExpression' &&
+    !callee.computed &&
+    callee.object.type === 'Identifier' &&
+    callee.object.name === 'React' &&
+    callee.property.type === 'Identifier'
+  ) {
+    return (
+      callee.property.name === 'memo' || callee.property.name === 'forwardRef'
     )
   }
+  return false
+}
 
-  return `import ${parts.join(', ')} from ${JSON.stringify(source)};`
+function classifyExportInit(
+  init: t.Node | null | undefined,
+  localName: string,
+): ExportClassification {
+  if (!init) return { kind: 'unknown' }
+  if (
+    init.type === 'ArrowFunctionExpression' ||
+    init.type === 'FunctionExpression'
+  ) {
+    return /^[A-Z]/.test(localName)
+      ? { kind: 'component' }
+      : { kind: 'unknown' }
+  }
+  if (init.type === 'CallExpression' && isComponentCallExpression(init)) {
+    return { kind: 'component' }
+  }
+  if (isLiteralInit(init) && init.start != null && init.end != null) {
+    return { kind: 'literal', valueStart: init.start, valueEnd: init.end }
+  }
+  return { kind: 'unknown' }
+}
+
+function collectModuleExports(ast: t.File): Map<string, ExportClassification> {
+  const map = new Map<string, ExportClassification>()
+
+  for (const node of ast.program.body) {
+    if (node.type === 'ExportDefaultDeclaration') {
+      const d = node.declaration
+      if (d.type === 'FunctionDeclaration') {
+        const name = d.id?.name ?? ''
+        map.set(
+          'default',
+          /^[A-Z]/.test(name) ? { kind: 'component' } : { kind: 'unknown' },
+        )
+      } else if (d.type === 'ClassDeclaration') {
+        map.set('default', { kind: 'unknown' })
+      } else {
+        map.set('default', classifyExportInit(d, 'Default'))
+      }
+      continue
+    }
+
+    if (node.type === 'ExportNamedDeclaration' && node.declaration) {
+      const d = node.declaration
+      if (d.type === 'FunctionDeclaration' && d.id) {
+        const name = d.id.name
+        map.set(
+          name,
+          /^[A-Z]/.test(name) ? { kind: 'component' } : { kind: 'unknown' },
+        )
+      } else if (d.type === 'VariableDeclaration') {
+        for (const decl of d.declarations) {
+          if (decl.id.type !== 'Identifier') continue
+          map.set(decl.id.name, classifyExportInit(decl.init, decl.id.name))
+        }
+      } else if (d.type === 'ClassDeclaration' && d.id) {
+        map.set(d.id.name, { kind: 'unknown' })
+      }
+    }
+  }
+
+  return map
 }
 
 function formData(message: IncomingMessage): Promise<FormData> {
@@ -68,7 +157,49 @@ function formData(message: IncomingMessage): Promise<FormData> {
   }).formData()
 }
 
+interface ImportLocation {
+  line: number
+  column: number
+}
+
+type ModuleContribution = Map<string, ImportLocation>
+type TestFileContribution = Map<string, ModuleContribution>
+
+function mapKeysEqual<K, V>(a: Map<K, V>, b: Map<K, V>): boolean {
+  if (a.size !== b.size) {
+    return false
+  }
+  for (const key of a.keys()) {
+    if (!b.has(key)) {
+      return false
+    }
+  }
+  return true
+}
+
 export function rscTestingPlugin(): PluginOption {
+  const referencedModules = new Map<string, Set<string>>()
+  const contributionsByTestFile = new Map<string, TestFileContribution>()
+
+  const recomputeModule = (moduleId: string) => {
+    const union = new Set<string>()
+
+    for (const contrib of contributionsByTestFile.values()) {
+      const modMap = contrib.get(moduleId)
+
+      if (modMap) {
+        for (const name of modMap.keys()) {
+          union.add(name)
+        }
+      }
+    }
+    if (union.size > 0) {
+      referencedModules.set(moduleId, union)
+    } else {
+      referencedModules.delete(moduleId)
+    }
+  }
+
   return [
     rsc({
       entries: {
@@ -209,19 +340,14 @@ export function rscTestingPlugin(): PluginOption {
       },
     },
     {
-      name: 'rsc-testing-plugin:transform-test-file',
+      name: 'rsc-testing-plugin:collect-test-file-imports',
       enforce: 'pre',
       applyToEnvironment(environment) {
         return environment.name === 'client'
       },
       async transform(code, id) {
-        if (!/\.test\.[cm]?[jt]sx?(\?.*)?$/.test(id)) {
-          return
-        }
-
-        if (id.includes('/node_modules/')) {
-          return
-        }
+        if (!/\.test\.[cm]?[jt]sx?(\?.*)?$/.test(id)) return
+        if (id.includes('/node_modules/')) return
 
         const ast = parse(code, {
           sourceType: 'module',
@@ -229,37 +355,67 @@ export function rscTestingPlugin(): PluginOption {
           errorRecovery: true,
         })
 
-        const importDecls = ast.program.body.filter(
-          (n): n is t.ImportDeclaration => n.type === 'ImportDeclaration',
-        )
+        interface BindingEntry {
+          local: string
+          imported: string
+          loc: ImportLocation
+        }
+        const bindingsBySource = new Map<string, BindingEntry[]>()
 
-        const localToImported = new Map<string, string>()
-        for (const decl of importDecls) {
-          for (const spec of decl.specifiers) {
+        const addBinding = (
+          source: string,
+          imported: string,
+          local: string,
+          loc: ImportLocation,
+        ) => {
+          let list = bindingsBySource.get(source)
+          if (!list) {
+            list = []
+            bindingsBySource.set(source, list)
+          }
+          list.push({ local, imported, loc })
+        }
+
+        const locOf = (node: t.Node | null | undefined): ImportLocation => {
+          if (!node?.loc) {
+            return { line: 1, column: 0 }
+          }
+          return { line: node.loc.start.line, column: node.loc.start.column }
+        }
+
+        for (const node of ast.program.body) {
+          if (node.type !== 'ImportDeclaration') {
+            continue
+          }
+          for (const spec of node.specifiers) {
             if (spec.type === 'ImportDefaultSpecifier') {
-              localToImported.set(spec.local.name, 'default')
+              addBinding(
+                node.source.value,
+                'default',
+                spec.local.name,
+                locOf(spec.local),
+              )
             } else if (spec.type === 'ImportSpecifier') {
               const imported =
                 spec.imported.type === 'Identifier'
                   ? spec.imported.name
                   : spec.imported.value
-              localToImported.set(spec.local.name, imported)
+              addBinding(
+                node.source.value,
+                imported,
+                spec.local.name,
+                locOf(spec.imported),
+              )
             }
           }
         }
 
-        interface DynamicImport {
-          source: string
-          patternStart: number
-          patternEnd: number
-          properties: Array<{ imported: string; local: string }>
-        }
-        const dynamicImports: DynamicImport[] = []
-
-        const usedAsComponent = new Set<string>()
+        const jsxLocals = new Set<string>()
 
         const walk = (node: unknown, parents: t.Node[]): void => {
-          if (node === null || typeof node !== 'object') return
+          if (node === null || typeof node !== 'object') {
+            return
+          }
           if (Array.isArray(node)) {
             for (const child of node) walk(child, parents)
             return
@@ -278,9 +434,7 @@ export function rscTestingPlugin(): PluginOption {
               }
               root = cursor
             }
-            if (root && localToImported.has(root.name)) {
-              usedAsComponent.add(root.name)
-            }
+            if (root) jsxLocals.add(root.name)
           }
 
           if (
@@ -290,148 +444,173 @@ export function rscTestingPlugin(): PluginOption {
             const call = n as unknown as t.CallExpression
             const arg = call.arguments[0]
             const declarator = parents.findLast(
-              (p): p is t.VariableDeclarator =>
-                p.type === 'VariableDeclarator',
+              (p): p is t.VariableDeclarator => p.type === 'VariableDeclarator',
             )
             if (
               arg?.type === 'StringLiteral' &&
               declarator &&
-              declarator.id.type === 'ObjectPattern' &&
-              declarator.id.start != null &&
-              declarator.id.end != null
+              declarator.id.type === 'ObjectPattern'
             ) {
-              const properties: DynamicImport['properties'] = []
               for (const prop of declarator.id.properties) {
-                if (prop.type !== 'ObjectProperty') continue
-                if (prop.key.type !== 'Identifier') continue
-                if (prop.value.type !== 'Identifier') continue
-                properties.push({
-                  imported: prop.key.name,
-                  local: prop.value.name,
-                })
-                localToImported.set(prop.value.name, prop.key.name)
-              }
-              if (properties.length > 0) {
-                dynamicImports.push({
-                  source: arg.value,
-                  patternStart: declarator.id.start,
-                  patternEnd: declarator.id.end,
-                  properties,
-                })
+                if (prop.type !== 'ObjectProperty') {
+                  continue
+                }
+                if (prop.key.type !== 'Identifier') {
+                  continue
+                }
+                if (prop.value.type !== 'Identifier') {
+                  continue
+                }
+                addBinding(
+                  arg.value,
+                  prop.key.name,
+                  prop.value.name,
+                  locOf(prop.key),
+                )
               }
             }
           }
 
           const nextParents = [...parents, n]
           for (const key of Object.keys(n)) {
-            if (key === 'loc' || key === 'start' || key === 'end') continue
+            if (key === 'loc' || key === 'start' || key === 'end') {
+              continue
+            }
             walk(n[key], nextParents)
           }
         }
         walk(ast.program, [])
 
-        if (usedAsComponent.size === 0) {
-          return
-        }
-
-        const edits: Array<{ start: number; end: number; text: string }> = []
-        const stubsByLocal = new Map<string, string>()
-
-        for (const dyn of dynamicImports) {
-          const kept: Array<{ imported: string; local: string }> = []
-          const removed: Array<{ imported: string; local: string }> = []
-          for (const prop of dyn.properties) {
-            if (usedAsComponent.has(prop.local)) removed.push(prop)
-            else kept.push(prop)
-          }
-          if (removed.length === 0) continue
-
-          const resolved = await this.resolve(dyn.source, id)
-          const resolvedId = resolved?.id ?? dyn.source
-          for (const r of removed) {
-            const path = `${resolvedId}#${r.imported}`
-            stubsByLocal.set(
-              r.local,
-              `const ${r.local} = () => null; ${r.local}.__componentPath = ${JSON.stringify(path)};`,
-            )
-          }
-
-          const keptText = kept
-            .map((p) =>
-              p.imported === p.local ? p.imported : `${p.imported}: ${p.local}`,
-            )
-            .join(', ')
-          edits.push({
-            start: dyn.patternStart,
-            end: dyn.patternEnd,
-            text: `{ ${keptText} }`,
-          })
-        }
-
-        for (const decl of importDecls) {
-          if (decl.start == null || decl.end == null) {
+        const nextContribution: TestFileContribution = new Map()
+        for (const [source, bindings] of bindingsBySource) {
+          const hasComponent = bindings.some((b) => jsxLocals.has(b.local))
+          if (!hasComponent) {
             continue
           }
 
-          const keepSpecifiers: t.ImportDeclaration['specifiers'] = []
-          const removedForStubs: Array<{ local: string; imported: string }> = []
+          const resolved = await this.resolve(source, id)
+          if (!resolved) {
+            continue
+          }
 
-          for (const spec of decl.specifiers) {
-            if (
-              spec.type === 'ImportDefaultSpecifier' &&
-              usedAsComponent.has(spec.local.name)
-            ) {
-              removedForStubs.push({
-                local: spec.local.name,
-                imported: 'default',
+          let modMap = nextContribution.get(resolved.id)
+          if (!modMap) {
+            modMap = new Map()
+            nextContribution.set(resolved.id, modMap)
+          }
+          for (const b of bindings) {
+            modMap.set(b.imported, b.loc)
+          }
+        }
+
+        const prevContribution: TestFileContribution =
+          contributionsByTestFile.get(id) ?? new Map()
+
+        const changedModules = new Set<string>()
+        for (const [mid, next] of nextContribution) {
+          const prev = prevContribution.get(mid)
+          if (!prev || !mapKeysEqual(prev, next)) {
+            changedModules.add(mid)
+          }
+        }
+        for (const mid of prevContribution.keys()) {
+          if (!nextContribution.has(mid)) {
+            changedModules.add(mid)
+          }
+        }
+
+        contributionsByTestFile.set(id, nextContribution)
+
+        for (const mid of changedModules) {
+          recomputeModule(mid)
+          const mod = this.environment.moduleGraph.getModuleById(mid)
+          if (mod) {
+            this.environment.moduleGraph.invalidateModule(mod)
+          }
+        }
+
+        if (changedModules.size > 0 && prevContribution.size > 0) {
+          this.environment.hot.send({ type: 'full-reload' })
+        }
+      },
+    },
+    {
+      name: 'rsc-testing-plugin:stub-imported-module',
+      enforce: 'pre',
+      applyToEnvironment(environment) {
+        return environment.name === 'client'
+      },
+      transform(code, id) {
+        const requested = referencedModules.get(id)
+        if (!requested || requested.size === 0) return
+
+        const ast = parse(code, {
+          sourceType: 'module',
+          plugins: ['typescript', 'jsx'],
+          errorRecovery: true,
+        })
+
+        const exports = collectModuleExports(ast)
+        const lines: string[] = []
+
+        for (const name of requested) {
+          const info = exports.get(name)
+          if (!info) {
+            this.warn(`"${name}" is not exported from ${id}; removed.`)
+            continue
+          }
+
+          if (info.kind === 'unknown') {
+            const message = `Failed to import "${name}" from "${id}": only React components and static values can be imported in the browser. Please remove "${name}" or move it to a separate module if you wish to use it in your browser tests.`
+            let reported = false
+            for (const [testFile, contrib] of contributionsByTestFile) {
+              const modMap = contrib.get(id)
+              if (!modMap) {
+                continue
+              }
+              const loc = modMap.get(name)
+              if (!loc) {
+                continue
+              }
+              this.warn({
+                message,
+                loc: {
+                  file: testFile,
+                  line: loc.line,
+                  column: loc.column,
+                },
               })
-            } else if (
-              spec.type === 'ImportSpecifier' &&
-              usedAsComponent.has(spec.local.name)
-            ) {
-              const imported =
-                spec.imported.type === 'Identifier'
-                  ? spec.imported.name
-                  : spec.imported.value
-              removedForStubs.push({
-                local: spec.local.name,
-                imported,
-              })
-            } else {
-              keepSpecifiers.push(spec)
+              reported = true
             }
-          }
-
-          if (removedForStubs.length === 0) {
+            if (!reported) {
+              this.warn(message)
+            }
             continue
           }
 
-          const resolved = await this.resolve(decl.source.value, id)
-          const resolvedId = resolved?.id ?? decl.source.value
-          for (const r of removedForStubs) {
-            const path = `${resolvedId}#${r.imported}`
-            stubsByLocal.set(
-              r.local,
-              `const ${r.local} = () => null; ${r.local}.__componentPath = ${JSON.stringify(path)};`,
+          if (info.kind === 'component') {
+            const varName = name === 'default' ? '__default__' : name
+            lines.push(`const ${varName} = () => null;`)
+            lines.push(
+              `${varName}.__componentPath = ${JSON.stringify(`${id}#${name}`)};`,
             )
+            if (name === 'default') {
+              lines.push(`export default ${varName};`)
+            } else {
+              lines.push(`export { ${varName} as ${name} };`)
+            }
+            continue
           }
 
-          const rebuilt = keepSpecifiers.length
-            ? renderImport(keepSpecifiers, decl.source.value)
-            : ''
-          edits.push({ start: decl.start, end: decl.end, text: rebuilt })
+          const valueSrc = code.slice(info.valueStart, info.valueEnd)
+          if (name === 'default') {
+            lines.push(`export default ${valueSrc};`)
+          } else {
+            lines.push(`export const ${name} = ${valueSrc};`)
+          }
         }
 
-        if (stubsByLocal.size === 0) return
-
-        edits.sort((a, b) => b.start - a.start)
-        let next = code
-        for (const edit of edits) {
-          next = next.slice(0, edit.start) + edit.text + next.slice(edit.end)
-        }
-        next = `${next}\n${[...stubsByLocal.values()].join('\n')}\n`
-
-        return { code: next, map: null }
+        return { code: lines.join('\n'), map: null }
       },
     },
   ]

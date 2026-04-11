@@ -1,10 +1,7 @@
 import { vi, it, expect, beforeAll, afterEach, afterAll } from 'vitest'
 import { page } from 'vitest/browser'
 import { renderAsync } from '../../src/render-async'
-import {
-  ServerComponentOne,
-  ServerComponentTwo,
-} from './server' with { type: 'react-server' }
+import { ServerComponentOne, ServerComponentTwo } from './server'
 
 beforeAll(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -41,8 +38,8 @@ it('supports dynamically imported named server components', async () => {
 it('does not warn on importing static constants', async () => {
   const { CONSTANT, ServerComponentTwo } = await import('./server')
 
-  expect(console.warn).not.toHaveBeenCalled()
   expect(CONSTANT).toBe(42)
+  expect(console.warn).not.toHaveBeenCalled()
 
   await renderAsync(<ServerComponentTwo username={CONSTANT.toString()} />)
   await expect
@@ -50,9 +47,16 @@ it('does not warn on importing static constants', async () => {
     .toHaveTextContent(`Hello, ${CONSTANT}`)
 })
 
-it.only('warns on importing functions', async () => {
-  const { helper } = await import('./server')
+it('warns on importing functions', async () => {
+  const { ambiguousFunction } = await import('./server')
 
-  expect(console.warn).toHaveBeenCalledExactlyOnceWith('TODO')
-  expect(helper).toBeUndefined()
+  expect.soft(console.warn).toHaveBeenCalledExactlyOnceWith('TODO')
+  expect.soft(ambiguousFunction).toBeUndefined()
 })
+
+// it('warns on importing classes', async () => {
+//   const { AmbiguousClass } = await import('./server')
+
+//   expect.soft(console.warn).toHaveBeenCalledExactlyOnceWith('TODO')
+//   expect.soft(AmbiguousClass).toBeUndefined()
+// })
