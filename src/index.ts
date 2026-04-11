@@ -1,5 +1,5 @@
 /// <reference types="vitest/config" />
-import { type IncomingMessage } from 'node:http'
+import { type IncomingMessage, type ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
 import { text } from 'node:stream/consumers'
@@ -253,6 +253,16 @@ export function rscTestingPlugin(): PluginOption {
       async configureServer(server) {
         const rscEnvironment = server.environments['rsc']
 
+        let queue: Promise<void> = Promise.resolve()
+        const serialize = <T>(task: () => Promise<T>): Promise<T> => {
+          const result = queue.then(task, task)
+          queue = result.then(
+            () => undefined,
+            () => undefined,
+          )
+          return result
+        }
+
         server.middlewares.use(async (req, res, next) => {
           const url = new URL(req.url ?? '/', 'http://localhost')
 
@@ -260,6 +270,20 @@ export function rscTestingPlugin(): PluginOption {
             return next()
           }
 
+          if (!rscEnvironment || !isRunnableDevEnvironment(rscEnvironment)) {
+            res.statusCode = 500
+            res.end('RSC environment not available')
+            return
+          }
+
+          await serialize(() => handleRscRequest(url, req, res))
+        })
+
+        const handleRscRequest = async (
+          url: URL,
+          req: IncomingMessage,
+          res: ServerResponse,
+        ) => {
           if (!rscEnvironment || !isRunnableDevEnvironment(rscEnvironment)) {
             res.statusCode = 500
             res.end('RSC environment not available')
@@ -362,7 +386,7 @@ export function rscTestingPlugin(): PluginOption {
               error instanceof Error ? error.message : 'RSC render failed',
             )
           }
-        })
+        }
       },
     },
     {
