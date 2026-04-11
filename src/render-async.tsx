@@ -35,7 +35,7 @@ export async function renderAsync(
 
   if (typeof componentPath !== 'string') {
     throw new Error(
-      `Failed to render a server component: expected a component path but got "${componentPath}"`,
+      `Failed to render a server component "${element.type.name}": expected a component path but got "${componentPath}"`,
     )
   }
 
