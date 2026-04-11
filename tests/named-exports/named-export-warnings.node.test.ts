@@ -6,7 +6,7 @@ import { rscTestingPlugin } from '../../src'
 async function createDisposableVitest() {
   const chunks: Array<string> = []
   const sink = new Writable({
-    write(chunk, _encoding, callback) {
+    write(chunk, _, callback) {
       chunks.push(String(chunk))
       callback()
     },
@@ -33,6 +33,22 @@ async function createDisposableVitest() {
     chunks,
   }
 }
+
+it('does not warn on importing static values', async () => {
+  const testFilePath = fileURLToPath(
+    new URL('./named-export-static-values.test.tsx', import.meta.url),
+  )
+  const importedFilePath = fileURLToPath(
+    new URL('./server.tsx', import.meta.url),
+  )
+
+  await using disposableVitest = await createDisposableVitest()
+  const runResult = await disposableVitest.vitest.start([testFilePath])
+
+  const stdout = disposableVitest.chunks.join('')
+  expect(stdout).not.toContain('Failed to import')
+  expect(runResult.unhandledErrors).toEqual([])
+})
 
 it('prints a warning importing an ambiguous function', async () => {
   const testFilePath = fileURLToPath(
@@ -73,21 +89,5 @@ it('prints a warning importing an ambiguous class', async () => {
   expect(stdout, 'Points to the problematic import').toContain(
     `import { ServerComponentOne, AmbiguousClass } from './server'`,
   )
-  expect(runResult.unhandledErrors).toEqual([])
-})
-
-it('does not warn on importing static values', async () => {
-  const testFilePath = fileURLToPath(
-    new URL('./named-export-static-values.test.tsx', import.meta.url),
-  )
-  const importedFilePath = fileURLToPath(
-    new URL('./server.tsx', import.meta.url),
-  )
-
-  await using disposableVitest = await createDisposableVitest()
-  const runResult = await disposableVitest.vitest.start([testFilePath])
-
-  const stdout = disposableVitest.chunks.join('')
-  expect(stdout).not.toContain('Failed to import')
   expect(runResult.unhandledErrors).toEqual([])
 })
