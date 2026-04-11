@@ -1,10 +1,10 @@
 import { Suspense } from 'react'
-import { randomUUID } from 'node:crypto'
+import { setTimeout } from 'node:timers/promises'
 
 export default async function AsyncComponent() {
   return (
     <Suspense fallback={<p>Fetching...</p>}>
-      <h1>Pokemons {randomUUID()}</h1>
+      <h1>Pokemons</h1>
       <PokemonList />
     </Suspense>
   )
@@ -20,7 +20,7 @@ async function PokemonList() {
       const response = await fetch(
         `https://pokeapi.co/api/v2/pokemon/${createRandomId()}`,
       )
-      await new Promise((r) => setTimeout(r, 1500))
+      await setTimeout(200)
       return response.json()
     }),
   )
