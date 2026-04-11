@@ -201,6 +201,32 @@ export function rscTestingPlugin(): PluginOption {
   }
 
   return [
+    {
+      /**
+       * Disable @vitejs/plugin-rsc's HMR cascade that invalidates rsc-side
+       * modules whenever the client environment emits a `js-update` for a
+       * module that is also a client reference. In a real dev server that
+       * cascade is what makes editing a `'use client'` file refresh the
+       * server graph; in a test runner there are no mid-test edits, but the
+       * same `js-update` event fires incidentally (first-time transforms,
+       * optimizeDeps cold starts, dependency re-transforms), and each one
+       * tears down the rsc module instance the running test is mutating.
+       *
+       * We capture `client.hot.send` before plugin-rsc wraps it, then in
+       * the `configureServer` post-hook (which runs after every plugin's
+       * `configureServer` has executed) we put the original back. This
+       * removes plugin-rsc's wrapper from the chain entirely while keeping
+       * the rest of plugin-rsc untouched.
+       */
+      name: 'rsc-testing-plugin:disable-rsc-hot-cascade',
+      configureServer(server) {
+        const clientHot = server.environments.client.hot
+        const originalSend = clientHot.send.bind(clientHot)
+        return () => {
+          clientHot.send = originalSend
+        }
+      },
+    },
     rsc({
       entries: {
         rsc: 'noop.js',
