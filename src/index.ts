@@ -553,10 +553,20 @@ export function rscTestingPlugin(): PluginOption {
         const exports = collectModuleExports(ast)
         const lines: string[] = []
 
+        const emitUndefined = (name: string) => {
+          if (name === 'default') {
+            lines.push(`export default undefined;`)
+          } else {
+            lines.push(`const ${name} = undefined;`)
+            lines.push(`export { ${name} };`)
+          }
+        }
+
         for (const name of requested) {
           const info = exports.get(name)
           if (!info) {
             this.warn(`"${name}" is not exported from ${id}; removed.`)
+            emitUndefined(name)
             continue
           }
 
@@ -585,6 +595,7 @@ export function rscTestingPlugin(): PluginOption {
             if (!reported) {
               this.warn(message)
             }
+            emitUndefined(name)
             continue
           }
 

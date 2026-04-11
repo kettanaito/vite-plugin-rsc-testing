@@ -12,4 +12,6 @@ export function ambiguousFunction() {
   throw new Error('Must never run client-side')
 }
 
-export class AmbiguousClass {}
+export class AmbiguousClass {
+  public action() {}
+}
