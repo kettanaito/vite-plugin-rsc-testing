@@ -17,6 +17,17 @@ it('dispatches a server action from the client component', async () => {
 it('calls a server action on client-side form submission', async () => {
   await renderAsync(<ActionFormSubmission />)
 
+  await page.getByLabelText('Title').fill('First Note')
+  await page.getByRole('button', { name: 'Create Note' }).click()
+
+  const notes = page.getByRole('list').getByRole('listitem')
+  await expect.element(notes).toHaveLength(1)
+  await expect.element(notes).toHaveTextContent('First Note')
+})
+
+it('persists server-side module state between server actions', async () => {
+  await renderAsync(<ActionFormSubmission />)
+
   {
     await page.getByLabelText('Title').fill('First Note')
     await page.getByRole('button', { name: 'Create Note' }).click()
