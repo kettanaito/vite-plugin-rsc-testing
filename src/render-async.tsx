@@ -41,6 +41,7 @@ export async function renderAsync(
 
   const searchParams = new URLSearchParams({
     c: componentPath,
+    taskId: globalThis.__VITEST_TASK_ID__,
   })
 
   if (element.props != null) {
