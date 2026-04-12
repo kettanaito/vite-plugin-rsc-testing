@@ -1,9 +1,9 @@
 export async function ServerComponentOne() {
-  return <p role="alert">Hello world</p>
+  return <h1>Hello world</h1>
 }
 
 export async function ServerComponentTwo({ username }: { username: string }) {
-  return <p role="alert">Hello, {username}</p>
+  return <h1>Hello, {username}</h1>
 }
 
 export const CONSTANT = 42

@@ -7,6 +7,6 @@ it('supports importing static constants', async () => {
 
   await renderAsync(<ServerComponentTwo username={CONSTANT.toString()} />)
   await expect
-    .element(page.getByRole('alert'))
+    .element(page.getByRole('heading'))
     .toHaveTextContent(`Hello, ${CONSTANT}`)
 })
