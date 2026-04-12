@@ -6,7 +6,6 @@ export default defineConfig({
   test: {
     globals: true,
     testTimeout: 5000,
-    fileParallelism: false,
     projects: [
       {
         extends: true,

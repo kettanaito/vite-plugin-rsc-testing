@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
 import { text } from 'node:stream/consumers'
 import { isRunnableDevEnvironment, type PluginOption } from 'vite'
+import { EvaluatedModules } from 'vite/module-runner'
 import rsc from '@vitejs/plugin-rsc'
 import type { VitestPluginContext } from 'vitest/node'
 import type React from 'react'
@@ -200,6 +201,8 @@ export function rscTestingPlugin(): PluginOption {
     }
   }
 
+  const modulesByTaskId = new Map<string, EvaluatedModules>()
+
   return [
     {
       /**
@@ -290,6 +293,14 @@ export function rscTestingPlugin(): PluginOption {
             return
           }
 
+          const taskId = url.searchParams.get('taskId')
+
+          if (typeof taskId !== 'string') {
+            this.error(
+              `Failed to process request: expected a taskId string but got ${taskId}`,
+            )
+          }
+
           /**
            * @note Invalidate the component module imports.
            * This request is fired in the "beforeEach" hook inserted by this plugin.
@@ -299,7 +310,10 @@ export function rscTestingPlugin(): PluginOption {
           const clearCacheFlag = url.searchParams.get('clearCache')
           if (clearCacheFlag === '1') {
             rscEnvironment.moduleGraph.invalidateAll()
-            rscEnvironment.runner.evaluatedModules.clear()
+
+            if (typeof taskId === 'string') {
+              modulesByTaskId.delete(taskId)
+            }
 
             res.statusCode = 200
             res.end()
@@ -315,6 +329,20 @@ export function rscTestingPlugin(): PluginOption {
 
           const [componentFileName, componentExportName] =
             componentPath.split('#')
+
+          /**
+           * @note Provision unique evaludated modules instances for each test case.
+           * This implements test case-based import transforms and enables file parallelism.
+           * Imported modules' cache is scoped to individual test cases (tasks) and gets
+           * reset whenever those test cases clear cache in the "afterEach" hook.
+           */
+          if (typeof taskId === 'string') {
+            if (!modulesByTaskId.has(taskId)) {
+              modulesByTaskId.set(taskId, new EvaluatedModules())
+            }
+            rscEnvironment.runner.evaluatedModules =
+              modulesByTaskId.get(taskId)!
+          }
 
           try {
             const componentModule =
