@@ -6,6 +6,7 @@ import { text } from 'node:stream/consumers'
 import { isRunnableDevEnvironment, type PluginOption } from 'vite'
 import { EvaluatedModules } from 'vite/module-runner'
 import rsc from '@vitejs/plugin-rsc'
+import { createMockResolver, preseedMockedModules } from './rpc/server'
 import type { VitestPluginContext } from 'vitest/node'
 import type React from 'react'
 import type { ReactFormState } from 'react-dom/client'
@@ -266,6 +267,8 @@ export function rscTestingPlugin(): PluginOption {
           return result
         }
 
+        const mockResolver = createMockResolver(server.hot)
+
         server.middlewares.use(async (req, res, next) => {
           const url = new URL(req.url ?? '/', 'http://localhost')
 
@@ -299,6 +302,7 @@ export function rscTestingPlugin(): PluginOption {
             this.error(
               `Failed to process request: expected a taskId string but got ${taskId}`,
             )
+            return
           }
 
           /**
@@ -310,10 +314,7 @@ export function rscTestingPlugin(): PluginOption {
           const clearCacheFlag = url.searchParams.get('clearCache')
           if (clearCacheFlag === '1') {
             rscEnvironment.moduleGraph.invalidateAll()
-
-            if (typeof taskId === 'string') {
-              modulesByTaskId.delete(taskId)
-            }
+            modulesByTaskId.delete(taskId)
 
             res.statusCode = 200
             res.end()
@@ -331,8 +332,7 @@ export function rscTestingPlugin(): PluginOption {
             componentPath.split('#')
 
           /**
-           * @note Provision unique evaludated modules instances for each test case.
-           * This implements test case-based import transforms and enables file parallelism.
+           * @note Provision unique evaluated modules instances for each test case.
            * Imported modules' cache is scoped to individual test cases (tasks) and gets
            * reset whenever those test cases clear cache in the "afterEach" hook.
            */
@@ -342,6 +342,28 @@ export function rscTestingPlugin(): PluginOption {
             }
             rscEnvironment.runner.evaluatedModules =
               modulesByTaskId.get(taskId)!
+          }
+
+          /**
+           * @note Pre-seed mocked modules from the browser's vi.mock() registry.
+           * The manifest is sent as a header on the first render request.
+           * Subsequent requests (actions) reuse the same evaluatedModules,
+           * so the mocks persist for the entire test case.
+           */
+          const mockedModulesHeader = req.headers['x-rsc-mocked-modules']
+          if (typeof mockedModulesHeader === 'string') {
+            const mockedModuleIds = JSON.parse(
+              mockedModulesHeader,
+            ) as Array<string>
+
+            const evaluatedModules = modulesByTaskId.get(taskId)
+            if (mockedModuleIds.length > 0 && evaluatedModules) {
+              await preseedMockedModules(
+                mockResolver,
+                evaluatedModules,
+                mockedModuleIds,
+              )
+            }
           }
 
           try {
@@ -620,7 +642,9 @@ export function rscTestingPlugin(): PluginOption {
       },
       transform(code, id) {
         const requested = referencedModules.get(id)
-        if (!requested || requested.size === 0) return
+        if (!requested || requested.size === 0) {
+          return
+        }
 
         const ast = parse(code, {
           sourceType: 'module',
@@ -629,7 +653,7 @@ export function rscTestingPlugin(): PluginOption {
         })
 
         const exports = collectModuleExports(ast)
-        const lines: string[] = []
+        const lines: Array<string> = []
 
         const emitUndefined = (name: string) => {
           if (name === 'default') {

@@ -14,6 +14,7 @@ import {
   encodeReply,
   setServerCallback,
 } from '@vitejs/plugin-rsc/browser'
+import './rpc/client'
 import type { RscPayload } from '.'
 
 setRequireModule({
@@ -48,24 +49,34 @@ export async function renderAsync(
     searchParams.set('p', JSON.stringify(element.props))
   }
 
+  const mockedModuleIds = extractMockedModuleIds()
+  console.log('[rsc:mock] mocked module ids:', [...mockedModuleIds])
+
+  const headers: Record<string, string> = {}
+  if (mockedModuleIds.size > 0) {
+    headers['x-rsc-mocked-modules'] = JSON.stringify([...mockedModuleIds])
+  }
+
   const componentUrl = `/__rsc?${searchParams.toString()}`
-  const payloadStream = createFromFetch<RscPayload>(fetch(componentUrl))
+  const payloadPromise = createFromFetch<RscPayload>(
+    fetch(componentUrl, { headers }),
+  )
 
   return render(
     <Suspense>
-      <RscRoot componentUrl={componentUrl} payloadStream={payloadStream} />,
+      <RscRoot componentUrl={componentUrl} payloadPromise={payloadPromise} />,
     </Suspense>,
   )
 }
 
 function RscRoot({
   componentUrl,
-  payloadStream,
+  payloadPromise,
 }: {
   componentUrl: string
-  payloadStream: PromiseLike<RscPayload>
+  payloadPromise: PromiseLike<RscPayload>
 }) {
-  const initialPayload = use(payloadStream)
+  const initialPayload = use(payloadPromise)
   const [payload, setPayload] = useState<RscPayload>(initialPayload)
 
   useEffect(() => {
@@ -78,11 +89,25 @@ function RscRoot({
           body: await encodeReply(args, { temporaryReferences }),
         }),
       )
+
       startTransition(() => setPayload(next))
-      if (next.returnValue && !next.returnValue.ok) throw next.returnValue.data
+
+      if (next.returnValue && !next.returnValue.ok) {
+        throw next.returnValue.data
+      }
+
       return next.returnValue?.data
     })
   }, [componentUrl])
 
   return payload.root
+}
+
+function extractMockedModuleIds(): Set<string> {
+  const ids = new Set<string>()
+  const registry = globalThis.__vitest_mocker__.registry
+  for (const [, entry] of registry.registryById) {
+    ids.add(entry.raw)
+  }
+  return ids
 }
