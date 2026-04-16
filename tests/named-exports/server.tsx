@@ -1,8 +1,10 @@
+export type Props = { username: string }
+
 export async function ServerComponentOne() {
   return <h1>Hello world</h1>
 }
 
-export async function ServerComponentTwo({ username }: { username: string }) {
+export async function ServerComponentTwo({ username }: Props) {
   return <h1>Hello, {username}</h1>
 }
 
