@@ -34,12 +34,22 @@ async function createDisposableVitest() {
   }
 }
 
+it('does not print a warning on importing types', async () => {
+  const testFilePath = fileURLToPath(
+    new URL('./named-export-type.test.tsx', import.meta.url),
+  )
+
+  await using disposableVitest = await createDisposableVitest()
+  const runResult = await disposableVitest.vitest.start([testFilePath])
+
+  const stdout = disposableVitest.chunks.join('')
+  expect(stdout).not.toContain('warning:')
+  expect(runResult.unhandledErrors).toEqual([])
+})
+
 it('does not warn on importing static values', async () => {
   const testFilePath = fileURLToPath(
     new URL('./named-export-static-values.test.tsx', import.meta.url),
-  )
-  const importedFilePath = fileURLToPath(
-    new URL('./server.tsx', import.meta.url),
   )
 
   await using disposableVitest = await createDisposableVitest()

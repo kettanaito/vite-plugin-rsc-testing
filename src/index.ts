@@ -465,6 +465,9 @@ export function rscTestingPlugin(): PluginOption {
           if (node.type !== 'ImportDeclaration') {
             continue
           }
+          if (node.importKind === 'type') {
+            continue
+          }
           for (const spec of node.specifiers) {
             if (spec.type === 'ImportDefaultSpecifier') {
               addBinding(
@@ -474,6 +477,9 @@ export function rscTestingPlugin(): PluginOption {
                 locOf(spec.local),
               )
             } else if (spec.type === 'ImportSpecifier') {
+              if (spec.importKind === 'type') {
+                continue
+              }
               const imported =
                 spec.imported.type === 'Identifier'
                   ? spec.imported.name
